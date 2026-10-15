@@ -33,16 +33,6 @@ merge-pdf/
 
 ---
 
-## Requisitos
-
-Antes de executar o projeto, certifique-se de ter o Python instalado e instale a biblioteca necessária:
-
-```sh
-pip install PyPDF2
-```
-
----
-
 ## Como Executar
 
 1. Clone ou faça o download deste repositório.
@@ -50,7 +40,11 @@ pip install PyPDF2
    ```sh
    cd merge-pdf
    ```
-3. Execute o arquivo principal:
+3. Antes de executar, certifique-se de ter o Python instalado e instale as bibliotecas necessárias:
+   ```sh
+   python requirements.py
+   ```
+4. Execute o arquivo principal:
    ```sh
    python main.py
    ```
@@ -59,10 +53,12 @@ pip install PyPDF2
 
 ## Uso
 
-1. Clique em **Selecionar PDFs** e escolha os arquivos que deseja mesclar.
-2. Organize a ordem dos arquivos ou remova aqueles que não deseja incluir.
+1. Clique em **Adicionar PDFs** ou arraste arquivos do Explorador para a lista. Apenas PDFs válidos são aceitos; outros formatos, pastas e PDFs ilegíveis ou protegidos por senha são ignorados. Os arquivos recebidos por arraste são sempre adicionados ao final, sem alterar a ordem dos anteriores. Durante esse arraste externo, a reorganização interna fica suspensa e volta a funcionar ao soltar ou sair da lista.
+2. Arraste um PDF para a posição desejada: a linha azul indica onde ele será inserido. Para mover vários juntos, selecione-os com Ctrl ou Shift, solte a tecla e arraste um dos selecionados. A lista rola automaticamente ao arrastar próximo às bordas; Esc cancela o arraste. Você também pode usar **Subir** e **Descer**, ou **Alt + ↑/↓**. A coluna **Ordem** mostra a sequência do PDF final. Use **Remover** ou **Delete** para retirar arquivos da lista.
 3. Clique em **Mesclar PDFs** e salve o arquivo mesclado no local desejado.
 4. A lista de arquivos será limpa automaticamente após o merge.
+
+Arquivos repetidos são ignorados. O aplicativo impede salvar sobre um dos PDFs de origem e mantém a lista se você cancelar o salvamento ou ocorrer um erro. O Tkinter acompanha as instalações padrão do Python para Windows; FFmpeg não é necessário.
 
 ---
 
