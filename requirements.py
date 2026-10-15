@@ -1,27 +1,7 @@
+"""Instala apenas as dependências usadas pelo aplicativo."""
 import subprocess
 import sys
+from pathlib import Path
 
-def install(package):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-
-def install_ffmpeg():
-    """Função para instalar o ffmpeg via winget."""
-    try:
-        subprocess.check_call(["winget", "install", "ffmpeg"])
-        print("FFmpeg foi instalado com sucesso!")
-    except subprocess.CalledProcessError as e:
-        print(f"Ocorreu um erro ao tentar instalar o FFmpeg: {e}")
-
-required_packages = [
-    "tkinter",
-    "PyPDF2"
-]
-
-# Instalar pacotes Python
-for package in required_packages:
-    install(package)
-
-# Instalar FFmpeg
-install_ffmpeg()
-
-print("Todos os pacotes necessários foram instalados com sucesso!")
+if __name__ == '__main__':
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '-r', str(Path(__file__).with_name('requirements.txt'))])

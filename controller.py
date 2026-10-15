@@ -1,5 +1,4 @@
 from model import PDFMergerModel
-from tkinter import filedialog
 
 class PDFMergerController:
     def __init__(self, view):
@@ -12,6 +11,9 @@ class PDFMergerController:
 
     def remove_selected(self):
         self.view.remove_selected_files()
+
+    def move_selected(self, direction):
+        self.view.move_selected_files(direction)
 
     def merge_pdfs(self):
         pdf_list = self.view.get_selected_files()
@@ -26,9 +28,9 @@ class PDFMergerController:
         try:
             PDFMergerModel.merge_pdfs(pdf_list, output_file)
             self.view.show_info("Sucesso", f"PDFs mesclados com sucesso!\nArquivo salvo em: {output_file}")
-            
+
             # Limpar a lista de arquivos após o merge
-            self.view.listbox.delete(0, 'end')
+            self.view.clear_files()
 
         except Exception as e:
             self.view.show_error("Erro", str(e))
