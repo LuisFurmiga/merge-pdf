@@ -1,13 +1,17 @@
 import os
+import math
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from tkinterdnd2 import COPY, DND_FILES, REFUSE_DROP, TkinterDnD
 
 
 class PDFMergerView:
     def __init__(self, root=None):
         self.controller = None
         self.files = []
-        self.root = root if root else tk.Tk()
+        self.root = root if root else TkinterDnD.Tk()
+        if root is not None:
+            TkinterDnD._require(self.root)
         self.root.title('Organizar e mesclar PDFs')
         style = ttk.Style(self.root)
         style.theme_use('clam')
@@ -49,6 +53,27 @@ class PDFMergerView:
         self.listbox.bind('<Alt-Up>', lambda event: self._move_shortcut(-1))
         self.listbox.bind('<Alt-Down>', lambda event: self._move_shortcut(1))
         self.listbox.bind('<Delete>', lambda event: self.controller.remove_selected())
+        self._drag = None
+        self._drag_scroll_job = None
+        self._external_drag = False
+        self._drop_animation_job = None
+        self._drop_leave_job = None
+        self._drop_phase = 0
+        self._drop_indicator = tk.Frame(self.listbox, background='#2457c5', height=3)
+        self._drop_overlay = tk.Canvas(self.listbox, background='#edf4ff',
+                                       highlightthickness=0, borderwidth=0, cursor='plus')
+        self._drop_overlay.bind('<Configure>', lambda event: self._draw_drop_overlay())
+        self.listbox.bind('<Destroy>', self._drop_destroy, add='+')
+        self.listbox.bind('<ButtonPress-1>', self._drag_start)
+        self.listbox.bind('<B1-Motion>', self._drag_motion)
+        self.listbox.bind('<ButtonRelease-1>', self._drag_release)
+        self.listbox.bind('<Escape>', self._drag_cancel)
+        for target in (self.listbox, self._drop_overlay):
+            target.drop_target_register(DND_FILES)
+            target.dnd_bind('<<DropEnter>>', self._external_drag_enter)
+            target.dnd_bind('<<DropPosition>>', self._external_drag_enter)
+            target.dnd_bind('<<DropLeave>>', self._schedule_external_leave)
+            target.dnd_bind('<<Drop:DND_Files>>', self._external_drop)
         actions = ttk.Frame(main)
         self.actions = actions
         actions.grid(row=4, column=0, sticky='ew', pady=12)
@@ -63,7 +88,7 @@ class PDFMergerView:
         self.status = tk.StringVar(value='Comece adicionando os PDFs que deseja juntar.')
         self.status_label = ttk.Label(main, textvariable=self.status, wraplength=500)
         self.status_label.grid(row=5, column=0, sticky='w')
-        self.help_label = ttk.Label(main, text='A mesclagem segue a ordem acima. Ctrl seleciona vários; Alt + ↑/↓ move a seleção.', wraplength=500)
+        self.help_label = ttk.Label(main, text='Solte PDFs do Explorador nesta lista para adicioná-los ao final. Arraste itens da lista para reordenar; Ctrl seleciona vários.', wraplength=500)
         self.help_label.grid(row=6, column=0, sticky='w', pady=(8, 0))
         self._compact_actions = None
         main.bind('<Configure>', self._resize_layout)
@@ -124,6 +149,7 @@ class PDFMergerView:
         return sorted(int(item) for item in self.listbox.selection())
 
     def _refresh(self, selected=()):
+        self._drag_cancel()
         children = self.listbox.get_children()
         if children:
             self.listbox.delete(*children)
@@ -170,6 +196,201 @@ class PDFMergerView:
     def _move_shortcut(self, direction):
         self.controller.move_selected(direction)
         return 'break'
+
+    def _drag_start(self, event):
+        if self._external_drag:
+            return 'break'
+        self._drag_cancel()
+        item = self.listbox.identify_row(event.y)
+        # Preserve the Treeview's native Ctrl/Shift selection behavior.
+        if not item or event.state & 0x0005:
+            return
+        if item not in self.listbox.selection():
+            self.listbox.selection_set(item)
+        self.listbox.focus(item)
+        self.listbox.focus_set()
+        self._drag = dict(item=item, selected=self._selected_indices(),
+                          x=event.x, y=event.y, active=False, slot=None)
+        return 'break'
+
+    def _drag_motion(self, event):
+        if self._external_drag:
+            return 'break'
+        if self._drag is None:
+            return
+        drag = self._drag
+        if not drag['active'] and max(abs(event.x - drag['x']), abs(event.y - drag['y'])) < 5:
+            return 'break'
+        drag['active'] = True
+        drag['pointer'] = (event.x, event.y)
+        self.listbox.configure(cursor='fleur')
+        self._drag_target(event.x, event.y)
+        if self._drag_scroll_job is None:
+            self._drag_scroll_job = self.root.after(100, self._drag_scroll)
+        return 'break'
+
+    def _drag_target(self, x, y):
+        self._drag['slot'] = None
+        self._drop_indicator.place_forget()
+        if not (0 <= x < self.listbox.winfo_width() and 0 <= y < self.listbox.winfo_height()):
+            return
+        if self.listbox.identify_region(x, y) == 'heading':
+            return
+        item = self.listbox.identify_row(y)
+        if item:
+            _, top, _, height = self.listbox.bbox(item)
+            after = y >= top + height / 2
+            slot = int(item) + int(after)
+            line_y = top + height if after else top
+        else:
+            # Empty space below the rows is a drop at the end.
+            visible = [self.listbox.bbox(item) for item in self.listbox.get_children()]
+            visible = [box for box in visible if box]
+            if not visible or y < visible[-1][1] + visible[-1][3]:
+                return
+            slot = len(self.files)
+            line_y = visible[-1][1] + visible[-1][3]
+        self._drag['slot'] = slot
+        self._drop_indicator.place(x=0, y=min(line_y, self.listbox.winfo_height() - 3), relwidth=1)
+        self._drop_indicator.lift()
+
+    def _drag_scroll(self):
+        self._drag_scroll_job = None
+        if self._drag is None or not self._drag['active']:
+            return
+        x, y = self._drag['pointer']
+        if 0 <= x < self.listbox.winfo_width():
+            if y < 45:
+                self.listbox.yview_scroll(-1, 'units')
+            elif y > self.listbox.winfo_height() - 28:
+                self.listbox.yview_scroll(1, 'units')
+        self._drag_target(x, y)
+        self._drag_scroll_job = self.root.after(100, self._drag_scroll)
+
+    def _drag_release(self, event):
+        if self._external_drag:
+            return 'break'
+        if self._drag is None:
+            return
+        drag = self._drag
+        if drag['active']:
+            self._drag_target(event.x, event.y)
+            slot = drag['slot']
+            if slot is not None:
+                selected = drag['selected']
+                chosen = set(selected)
+                moved = [self.files[index] for index in selected]
+                remaining = [path for index, path in enumerate(self.files) if index not in chosen]
+                target = slot - sum(index < slot for index in selected)
+                reordered = remaining[:target] + moved + remaining[target:]
+                if reordered != self.files:
+                    self.files[:] = reordered
+                    self._refresh(list(range(target, target + len(moved))))
+                    self.status.set('Ordem atualizada. O PDF final seguirá esta sequência.')
+        else:
+            self.listbox.selection_set(drag['item'])
+        self._drag_cancel()
+        return 'break'
+
+    def _drag_cancel(self, event=None):
+        if self._drag_scroll_job is not None:
+            self.root.after_cancel(self._drag_scroll_job)
+            self._drag_scroll_job = None
+        self._drag = None
+        self._drop_indicator.place_forget()
+        self.listbox.configure(cursor='')
+        if event is not None:
+            return 'break'
+
+    def _external_drag_enter(self, event):
+        if self._drop_leave_job is not None:
+            self.root.after_cancel(self._drop_leave_job)
+            self._drop_leave_job = None
+        entering = not self._external_drag
+        self._external_drag = True
+        self._drag_cancel()
+        self.listbox.configure(cursor='plus')
+        if entering:
+            self._drop_overlay.place(x=0, y=0, relwidth=1, relheight=1)
+            self._drop_overlay.tk.call('raise', self._drop_overlay._w)
+            self._animate_drop_overlay()
+        return COPY
+
+    def _draw_drop_overlay(self):
+        canvas = self._drop_overlay
+        width, height = canvas.winfo_width(), canvas.winfo_height()
+        canvas.delete('all')
+        if width < 24 or height < 24:
+            return
+        blue = '#2457c5'
+        pulse = (math.sin(self._drop_phase / 5) + 1) / 2
+        canvas.create_rectangle(8, 8, width - 9, height - 9,
+                                outline=blue, width=2, dash=(8, 6),
+                                dashoffset=self._drop_phase % 14)
+        center_x, center_y = width / 2, height / 2
+        if height >= 210:
+            icon_y = center_y - 58
+            canvas.create_rectangle(center_x - 20, icon_y - 24, center_x + 20,
+                                    icon_y + 24, outline=blue, width=2)
+            canvas.create_text(center_x, icon_y, text='PDF', fill=blue,
+                               font=('Segoe UI', 10, 'bold'))
+        title = canvas.create_text(center_x, center_y - 3, text='Solte os PDFs aqui', fill=blue,
+                                   font=('Segoe UI', 12, 'bold'), width=max(40, width - 48), justify='center')
+        title_box = canvas.bbox(title)
+        arrow_gap = (title_box[2] - title_box[0]) / 2 + 20 + 10 * pulse
+        if width / 2 > arrow_gap + 48 and height >= 110:
+            for direction in (-1, 1):
+                tip = center_x + direction * arrow_gap
+                canvas.create_line(tip + direction * 28, center_y - 3, tip, center_y - 3,
+                                   arrow=tk.LAST, arrowshape=(10, 12, 5), fill=blue, width=3)
+        if height >= 110:
+            canvas.create_text(center_x, center_y + 33, text='Apenas PDFs • Adicionados ao final da lista',
+                               fill='#42618c', font=('Segoe UI', 10),
+                               width=max(40, width - 48), justify='center')
+
+    def _animate_drop_overlay(self):
+        self._drop_animation_job = None
+        if not self._external_drag:
+            return
+        self._drop_phase += 1
+        self._draw_drop_overlay()
+        self._drop_animation_job = self.root.after(50, self._animate_drop_overlay)
+
+    def _schedule_external_leave(self, event):
+        # Moving between the list and its overlay generates Leave/Enter events.
+        if self._drop_leave_job is not None:
+            self.root.after_cancel(self._drop_leave_job)
+        self._drop_leave_job = self.root.after(60, self._external_drag_leave)
+
+    def _external_drag_leave(self, event=None):
+        for job in (self._drop_animation_job, self._drop_leave_job):
+            if job is not None:
+                self.root.after_cancel(job)
+        self._drop_animation_job = None
+        self._drop_leave_job = None
+        self._external_drag = False
+        self._drop_overlay.place_forget()
+        self.listbox.configure(cursor='')
+
+    def _drop_destroy(self, event):
+        if event.widget is self.listbox:
+            for job in (self._drop_animation_job, self._drop_leave_job, self._drag_scroll_job):
+                if job is not None:
+                    self.root.after_cancel(job)
+
+    def _external_drop(self, event):
+        self._external_drag = True
+        self._drag_cancel()
+        try:
+            paths = self.root.tk.splitlist(event.data)
+            if self.controller and paths and self.controller.add_files(paths):
+                return COPY
+            return REFUSE_DROP
+        except tk.TclError:
+            self.status.set('Não foi possível ler os arquivos arrastados. Tente novamente.')
+            return REFUSE_DROP
+        finally:
+            self._external_drag_leave()
 
     def remove_selected_files(self):
         selected = self._selected_indices()

@@ -1,8 +1,19 @@
 import os
 import tempfile
-from PyPDF2 import PdfMerger
+from PyPDF2 import PdfMerger, PdfReader
 
 class PDFMergerModel:
+    @staticmethod
+    def is_valid_pdf(path):
+        if os.path.splitext(path)[1].lower() != '.pdf' or not os.path.isfile(path):
+            return False
+        try:
+            with open(path, 'rb') as stream:
+                reader = PdfReader(stream)
+                return not reader.is_encrypted and len(reader.pages) > 0
+        except Exception:
+            return False
+
     @staticmethod
     def merge_pdfs(pdf_list, output_path):
         """

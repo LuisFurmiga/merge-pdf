@@ -7,7 +7,18 @@ class PDFMergerController:
     def select_files(self):
         files = self.view.ask_open_files()
         if files:
-            self.view.add_files(files)
+            self.add_files(files)
+
+    def add_files(self, files):
+        valid = [path for path in files if PDFMergerModel.is_valid_pdf(path)]
+        if valid:
+            self.view.add_files(valid)
+        rejected = len(files) - len(valid)
+        if rejected:
+            self.view.status.set(
+                f'{rejected} arquivo(s) ignorado(s). Apenas PDFs válidos, com páginas e sem senha são aceitos.'
+            )
+        return bool(valid)
 
     def remove_selected(self):
         self.view.remove_selected_files()
